@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>media.net SIMID Survey</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    font-family: Arial, Helvetica, sans-serif;
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+  }
+  .screen {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    color: #ffffff;
+    text-align: center;
+    padding: 24px;
+  }
+  .screen.active {
+    display: flex;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0;
+    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.6);
+  }
+  button {
+    background: #ff6a00;
+    border: none;
+    color: #ffffff;
+    padding: 10px 28px;
+    font-size: 16px;
+    border-radius: 24px;
+    cursor: pointer;
+  }
+  button:hover {
+    background: #e65c00;
+  }
+</style>
+</head>
+<body>
+
+  <div id="welcome" class="screen">
+    <h1>Welcome to media.net</h1>
+    <button id="btn-thanks">Thanks</button>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  var PIXEL_HTML = "https://httpbin.org/get?evt=fired_by_HTML";
+  var PIXEL_PLAYER = "https://httpbin.org/get?evt=fired_by_player";
+
+  function firePixelByHtml(step) {
+    var img = new Image();
+    img.src = PIXEL_HTML + "&step=" + encodeURIComponent(step) + "&cb=" + Date.now();
+  }
+
+  function firePixelByPlayer(step) {
+    sendMessage("SIMID:Creative:reportTracking", {
+      trackingUrls: [PIXEL_PLAYER + "&step=" + encodeURIComponent(step) + "&cb=" + Date.now()]
+    }).catch(function () {});
+  }
+
+  var inIframe = window.parent !== window;
+  var sessionId = null;
+  var messageIdCounter = 0;
+  var pending = {};
+
+  function uuidv4() {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      var r = (Math.random() * 16) | 0;
+      var v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  function sendMessage(type, args) {
+    if (!inIframe) {
+      console.log("[SIMID demo - standalone preview]", type, args || {});
+      return Promise.resolve({});
+    }
+    var messageId = ++messageIdCounter;
+    var payload = { sessionId: sessionId, messageId: messageId, timestamp: Date.now(), type: type, args: args || {} };
+    window.parent.postMessage(JSON.stringify(payload), "*");
+    return new Promise(function (resolve, reject) {
+      pending[messageId] = { resolve: resolve, reject: reject };
+    });
+  }
+
+  function respond(kind, messageId, value) {
+    if (!inIframe) return;
+    window.parent.postMessage(JSON.stringify({
+      sessionId: sessionId,
+      messageId: ++messageIdCounter,
+      timestamp: Date.now(),
+      type: kind,
+      args: { messageId: messageId, value: value || {} }
+    }), "*");
+  }
+
+  function onMessage(event) {
+    var msg;
+    try { msg = JSON.parse(event.data); } catch (e) { return; }
+    if (!msg || typeof msg !== "object" || !msg.type) return;
+
+    if (msg.type === "resolve" || msg.type === "reject") {
+      var waiter = pending[msg.args && msg.args.messageId];
+      if (waiter) {
+        delete pending[msg.args.messageId];
+        msg.type === "resolve" ? waiter.resolve(msg.args.value) : waiter.reject(msg.args.value);
+      }
+      return;
+    }
+
+    switch (msg.type) {
+      case "SIMID:Player:init":
+        respond("resolve", msg.messageId, {});
+        break;
+      case "SIMID:Player:startCreative":
+        respond("resolve", msg.messageId, {});
+        onCreativeStarted();
+        break;
+      case "SIMID:Player:adSkipped":
+      case "SIMID:Player:adStopped":
+      case "SIMID:Player:fatalError":
+        respond("resolve", msg.messageId, {});
+        break;
+    }
+  }
+
+  function onCreativeStarted() {
+    firePixelByHtml("welcome_shown");
+    firePixelByPlayer("creative_started");
+    document.getElementById("welcome").classList.add("active");
+  }
+
+  function init() {
+    document.getElementById("btn-thanks").addEventListener("click", function () {
+      firePixelByHtml("thanks_clicked");
+      firePixelByPlayer("thanks_clicked");
+      setTimeout(function () {
+        sendMessage("SIMID:Creative:requestStop").catch(function () {});
+      }, 1000);
+    });
+
+    window.addEventListener("message", onMessage);
+
+    if (inIframe) {
+      sessionId = uuidv4();
+      sendMessage("createSession");
+    } else {
+      onCreativeStarted();
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
+})();
+</script>
+</body>
+</html>
