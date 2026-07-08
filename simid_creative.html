@@ -2,70 +2,39 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>media.net SIMID Survey</title>
+<title>SIMID Diagnostics</title>
 <style>
   html, body {
     margin: 0;
     padding: 0;
     width: 100%;
     height: 100%;
-    font-family: Arial, Helvetica, sans-serif;
+    background: transparent;
     overflow: hidden;
-  }
-  body {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.55);
-  }
-  .screen {
-    display: none;
-    flex-direction: column;
-    align-items: center;
-    gap: 18px;
-    color: #ffffff;
-    text-align: center;
-    padding: 24px;
-  }
-  .screen.active {
-    display: flex;
-  }
-  h1 {
-    font-size: 22px;
-    margin: 0;
-    text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.6);
-  }
-  button {
-    background: #ff6a00;
-    border: none;
-    color: #ffffff;
-    padding: 10px 28px;
-    font-size: 16px;
-    border-radius: 24px;
-    cursor: pointer;
-  }
-  button:hover {
-    background: #e65c00;
   }
 </style>
 </head>
 <body>
 
-  <div id="welcome" class="screen">
-    <h1>Welcome to media.net</h1>
-    <button id="btn-thanks">Thanks</button>
-  </div>
-
 <script>
 (function () {
   "use strict";
 
+  // Every diagnostic step fires this pixel directly from the HTML (no SIMID
+  // dependency), so the timeline is captured even if the handshake never
+  // completes. step = which point in the SIMID protocol was reached.
   var PIXEL_HTML = "https://httpbin.org/get?evt=fired_by_HTML";
+  // Fired only once the SIMID:Creative:reportTracking channel is available,
+  // to separately confirm the delegated tracking path works.
   var PIXEL_PLAYER = "https://httpbin.org/get?evt=fired_by_player";
 
-  function firePixelByHtml(step) {
+  var HANDSHAKE_TIMEOUT_MS = 4000;
+
+  function firePixelByHtml(step, extra) {
     var img = new Image();
-    img.src = PIXEL_HTML + "&step=" + encodeURIComponent(step) + "&cb=" + Date.now();
+    var qs = "&step=" + encodeURIComponent(step) + "&cb=" + Date.now();
+    if (extra) qs += "&info=" + encodeURIComponent(extra);
+    img.src = PIXEL_HTML + qs;
   }
 
   function firePixelByPlayer(step) {
@@ -78,6 +47,8 @@
   var sessionId = null;
   var messageIdCounter = 0;
   var pending = {};
+  var handshakeTimer = null;
+  var renderConfirmed = false;
 
   function uuidv4() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -89,7 +60,7 @@
 
   function sendMessage(type, args) {
     if (!inIframe) {
-      console.log("[SIMID demo - standalone preview]", type, args || {});
+      console.log("[SIMID diagnostics - standalone preview]", type, args || {});
       return Promise.resolve({});
     }
     var messageId = ++messageIdCounter;
@@ -120,50 +91,62 @@
       var waiter = pending[msg.args && msg.args.messageId];
       if (waiter) {
         delete pending[msg.args.messageId];
-        msg.type === "resolve" ? waiter.resolve(msg.args.value) : waiter.reject(msg.args.value);
+        if (msg.type === "resolve") {
+          clearTimeout(handshakeTimer);
+          firePixelByHtml("create_session_resolved");
+          waiter.resolve(msg.args.value);
+        } else {
+          waiter.reject(msg.args.value);
+        }
       }
       return;
     }
 
     switch (msg.type) {
       case "SIMID:Player:init":
+        firePixelByHtml("player_init_received");
         respond("resolve", msg.messageId, {});
         break;
       case "SIMID:Player:startCreative":
+        renderConfirmed = true;
+        firePixelByHtml("start_creative_received");
+        firePixelByPlayer("start_creative_received");
         respond("resolve", msg.messageId, {});
-        onCreativeStarted();
         break;
       case "SIMID:Player:adSkipped":
+        firePixelByHtml("ad_skipped_received");
+        respond("resolve", msg.messageId, {});
+        break;
       case "SIMID:Player:adStopped":
+        firePixelByHtml("ad_stopped_received");
+        respond("resolve", msg.messageId, {});
+        break;
       case "SIMID:Player:fatalError":
+        firePixelByHtml("fatal_error_received", (msg.args && msg.args.reason) || "");
         respond("resolve", msg.messageId, {});
         break;
     }
-  }
-
-  function onCreativeStarted() {
-    firePixelByHtml("welcome_shown");
-    firePixelByPlayer("creative_started");
-    document.getElementById("welcome").classList.add("active");
   }
 
   function init() {
-    document.getElementById("btn-thanks").addEventListener("click", function () {
-      firePixelByHtml("thanks_clicked");
-      firePixelByPlayer("thanks_clicked");
-      setTimeout(function () {
-        sendMessage("SIMID:Creative:requestStop").catch(function () {});
-      }, 1000);
-    });
+    firePixelByHtml("creative_script_loaded");
 
     window.addEventListener("message", onMessage);
 
-    if (inIframe) {
-      sessionId = uuidv4();
-      sendMessage("createSession");
-    } else {
-      onCreativeStarted();
+    if (!inIframe) {
+      firePixelByHtml("standalone_mode");
+      return;
     }
+
+    sessionId = uuidv4();
+    firePixelByHtml("create_session_sent");
+    sendMessage("createSession");
+
+    handshakeTimer = setTimeout(function () {
+      if (!renderConfirmed) {
+        firePixelByHtml("handshake_timeout");
+      }
+    }, HANDSHAKE_TIMEOUT_MS);
   }
 
   document.addEventListener("DOMContentLoaded", init);
