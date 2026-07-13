@@ -20,13 +20,8 @@
 (function () {
   "use strict";
 
-  // Every diagnostic step fires this pixel directly from the HTML (no SIMID
-  // dependency), so the timeline is captured even if the handshake never
-  // completes. step = which point in the SIMID protocol was reached.
   var PIXEL_HTML = "https://httpbin.org/get?evt=fired_by_HTML";
-  // Fired only once the SIMID:Creative:reportTracking channel is available,
-  // to separately confirm the delegated tracking path works.
-  var PIXEL_PLAYER = "https://httpbin.org/get?evt=fired_by_player";
+  var PIXEL_PLAYER = "https://httpbin.org/get?evt=fired_by_player_catered_by_HTML";
 
   var HANDSHAKE_TIMEOUT_MS = 4000;
 
@@ -45,6 +40,7 @@
 
   var inIframe = window.parent !== window;
   var sessionId = null;
+  var sessionEstablished = false;
   var messageIdCounter = 0;
   var pending = {};
   var handshakeTimer = null;
@@ -92,8 +88,7 @@
       if (waiter) {
         delete pending[msg.args.messageId];
         if (msg.type === "resolve") {
-          clearTimeout(handshakeTimer);
-          firePixelByHtml("create_session_resolved");
+          firePixelByHtml("message_resolved_by_player");
           waiter.resolve(msg.args.value);
         } else {
           waiter.reject(msg.args.value);
@@ -103,12 +98,25 @@
     }
 
     switch (msg.type) {
+      // FIX 2: some players initiate the session themselves instead of
+      // waiting for the creative to do it. Handle an incoming createSession:
+      // adopt the player's sessionId and resolve, so either handshake
+      // direction works.
+      case "createSession":
+        sessionEstablished = true;
+        sessionId = msg.sessionId || sessionId;
+        firePixelByHtml("player_initiated_session_received");
+        respond("resolve", msg.messageId, {});
+        break;
       case "SIMID:Player:init":
+        sessionEstablished = true;
+        if (msg.sessionId) sessionId = msg.sessionId;
         firePixelByHtml("player_init_received");
         respond("resolve", msg.messageId, {});
         break;
       case "SIMID:Player:startCreative":
         renderConfirmed = true;
+        clearTimeout(handshakeTimer);
         firePixelByHtml("start_creative_received");
         firePixelByPlayer("start_creative_received");
         respond("resolve", msg.messageId, {});
@@ -144,12 +152,19 @@
 
     handshakeTimer = setTimeout(function () {
       if (!renderConfirmed) {
-        firePixelByHtml("handshake_timeout");
+        firePixelByHtml("handshake_timeout", sessionEstablished ? "session_ok_no_startCreative" : "no_session");
       }
     }, HANDSHAKE_TIMEOUT_MS);
   }
 
-  document.addEventListener("DOMContentLoaded", init);
+  // FIX 1: don't rely solely on DOMContentLoaded. If the player injected
+  // this document into an iframe that has already finished parsing,
+  // DOMContentLoaded has fired and the listener would never trigger.
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();
 </script>
 </body>
