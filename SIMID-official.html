@@ -1,305 +1,468 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title> A very simple SIMID player</title>
-  <script src="../simid_protocol.js"></script>
-  <script src="simid_player.js"></script>
-  <style>
-    .linear_simid_creative {
-      position: absolute;
-      top: 0;
-      border-width: 0px;
-      width: 640px;
-      height: 480px;
-    }
-    .overlayed {
-      position: absolute;
-      top: 0;
-      width: 640px;
-      height: 480px;
-    }
-    .content {
-      width: 640px;
-      height: 480px;
-    }
-    .nonlinear_inputs {
-      width: 50px;
-    }
-    .hidden {
-      display: none;
-    }    
-    .ad_type_label {
-      font-size: 16px;
-    }
-  </style>
-  <script>
-		/** If ad type is linear, a media file input appears while non-linear ads ask for dimensions instead. */
-    function setInputsForAdType() {
-      let linearButton = document.getElementById("linear_ad");
-      let creativeDimensions = document.getElementById("creative_dimensions");
-      let mediaFile = document.getElementById("media_file");
-      let creativeDuration = document.getElementById("creative_duration");
-      
-      if (linearButton.checked) {
-        creativeDimensions.classList.add("hidden");
-        mediaFile.classList.remove("hidden");
-        creativeDuration.classList.add("hidden");
-     
-      } else {
-        creativeDimensions.classList.remove("hidden");
-        mediaFile.classList.add("hidden");
-        creativeDuration.classList.remove("hidden");
-      }
-    }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIMID 1.2 QA Benchmark Creative</title>
+<!--
+  =====================================================================
+  SIMID 1.2 QA BENCHMARK - INTERACTIVE CREATIVE
+  =====================================================================
+  Purpose : Benchmark a video player's SIMID 1.2 capabilities.
+  Standard: IAB VAST 4.x <InteractiveCreativeFile apiFramework="SIMID">
+            + SIMID 1.2 cross-origin postMessage protocol.
 
-    let simidPlayer;
-    function initAd() {
-      // clean old ad if it exists
-      if (simidPlayer) {
-        simidPlayer.stopAd();
-      }
+  This single file is fully self-contained (no external scripts) so it
+  can be dropped straight onto GitHub Pages and referenced from a VAST
+  <InteractiveCreativeFile> node.
 
-      let isLinear = document.getElementById("linear_ad").checked;
-      // Init ad should be called before playad.
-      simidPlayer = new SimidPlayer(() => {simidPlayer = null;}, isLinear);
-      simidPlayer.initializeAd();
-    }
+  It exercises THREE distinct tracking paths so each can be isolated in
+  the browser Network DevTools tab (filter: "testing.simid.local"):
 
-    function playAd() {
-      if (!simidPlayer) {
-        initAd();
-      }
-      simidPlayer.playAd();
-      simidPlayer.setCreativeControlsState_(ENABLED);
-    }
+    Pixel A - Fired by the PLAYER, declared in the VAST XML
+              (<Tracking event="interactiveStart">). The creative does
+              NOT fire this; it only reports whether the player did.
+    Pixel B - Fired by the PLAYER, but REQUESTED by this creative via
+              the SIMID Creative:reportTracking postMessage. URL + custom
+              metric name are supplied here, not in the VAST.
+    Pixel C - Fired by THIS creative directly, using the browser's native
+              Image()/fetch() APIs. The player is not involved at all.
+  =====================================================================
+-->
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #1a1f2b;
+    --panel-2: #232a39;
+    --line: #313a4d;
+    --text: #e6e9f0;
+    --muted: #97a1b6;
+    --accent: #5b8cff;
+    --a: #ff9f43;   /* Pixel A */
+    --b: #4ecdc4;   /* Pixel B */
+    --c: #c37bff;   /* Pixel C */
+    --ok: #35d07f;
+    --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    gap: 14px;
+    overflow: auto;
+  }
+  header h1 { font-size: 18px; margin: 0 0 2px; }
+  header p { margin: 0; color: var(--muted); font-size: 12px; }
 
-    function closeAd() {
-      if (!simidPlayer) {
-        return;
-      }
-      simidPlayer.stopAd();
-      simidPlayer.sendLog("User clicked close ad button on player");
-      simidPlayer.setCreativeControlsState_(DISABLED);
-    }
+  #standaloneWarn {
+    display: none;
+    background: #3a2a12;
+    border: 1px solid #7a5a1e;
+    color: #ffcf8a;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+  }
 
-    function skipAd() {
-      if (!simidPlayer) {
-        return;
-      }
-      simidPlayer.skipAd();
-      simidPlayer.sendLog("User clicked skip ad button on player");
-      simidPlayer.setCreativeControlsState_(DISABLED);
-    }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
 
-    function fatalError() {
-      if (!simidPlayer) {
-        return;
-      }
-      simidPlayer.stopAd();
-      simidPlayer.sendLog("User clicked fatal error button on player");
-      simidPlayer.setCreativeControlsState_(DISABLED);
-    }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .tag {
+    font-size: 11px; font-weight: 700; letter-spacing: .5px;
+    padding: 2px 8px; border-radius: 999px; width: fit-content;
+    text-transform: uppercase;
+  }
+  .tag.a { background: rgba(255,159,67,.15); color: var(--a); }
+  .tag.b { background: rgba(78,205,196,.15); color: var(--b); }
+  .tag.c { background: rgba(195,123,255,.15); color: var(--c); }
+  .card h2 { font-size: 14px; margin: 0; }
+  .card .desc { font-size: 12px; color: var(--muted); margin: 0; flex: 1; }
+  .card .url { font-size: 11px; color: var(--muted); word-break: break-all; background: var(--panel-2); padding: 6px 8px; border-radius: 6px; }
 
-    function pauseAd() {
-      if (!simidPlayer) {
-        return;
-      }
-      simidPlayer.pauseAd();
-      simidPlayer.sendLog("User clicked pause ad button on player");
-    }
- 
-    function playAdVideo() {
-      if (!simidPlayer) {
-        return;
-      }
-      simidPlayer.playAdVideo();
-      simidPlayer.sendLog("User clicked play ad button on player");
-    }
+  button {
+    font: inherit; font-weight: 600;
+    color: #fff; background: var(--accent);
+    border: 0; border-radius: 8px; padding: 10px 12px;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.b { background: #2b8f88; }
+  button.c { background: #8a4fd0; }
 
-    function switchCreative(value) {
-      document.getElementById('creative_url').value = '../creatives/' + value;
+  .status { font-size: 12px; }
+  .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); vertical-align: middle; }
+  .status.fired .dot { background: var(--ok); }
+  .status.waiting .dot { background: var(--a); animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
 
-      document.getElementById('geolocation').classList.add("hidden");
-      // populate ad parameters with some hard coded values
-      let adParams = '';
-      let adParamsObj = '';
-      switch (value) {
-        case 'simid_overlay.html':
-          document.getElementById("linear_ad").checked = true;
-          break;
-        case 'survey.html':
-          document.getElementById("linear_ad").checked = true;
-          adParamsObj = [
-            {'question':'Would you like a survey?',
-             'answers':['Yes', 'No', 'Not Sure']},
-            {'question':'Are you certain?',
-             'answers':['Of course', 'Not Really', 'Well...']},
-            {'question':'What animals do you like?',
-             'answers':['Cats', 'Dogs', 'Other']}
-          ];
-          adParams = JSON.stringify(adParamsObj);
-          break;
-        case 'selector.html':
-          document.getElementById("linear_ad").checked = true;
-          break;
-        case 'extender.html':
-          document.getElementById("linear_ad").checked = true;
-          break;
-        case 'simid_map.html':
-          document.getElementById("linear_ad").checked = true;
-          document.getElementById('geolocation').classList.remove("hidden");
-          adParamsObj = {
-           "buttonLabel": "Park",
-           "searchQuery": "nearby park",
-           "marker": "http://maps.google.com/mapfiles/kml/shapes/parks.png"
-          };
-          
-          adParams = JSON.stringify(adParamsObj);
-          break;
-        case 'testers_nonlinear.html':
-          document.getElementById("nonlinear_ad").checked = true;
-          break;
-        case 'banner_nonlinear.html':
-          document.getElementById("nonlinear_ad").checked = true;
-          document.getElementById("duration").value = 10;
-          adParamsObj = {
-           "bannerText": "Click here to draw!",
-           "webUrl": "https://quickdraw.withgoogle.com/",
-          };
-          
-          adParams = JSON.stringify(adParamsObj);
-          break;
-        case 'hover_nonlinear.html':
-          document.getElementById("nonlinear_ad").checked = true;
-          break;
-      }
-      setInputsForAdType();
-      document.getElementById('ad_params').value = adParams;
-    }
+  .handshake { display: flex; flex-wrap: wrap; gap: 8px; }
+  .step {
+    font-size: 11px; padding: 4px 10px; border-radius: 999px;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  }
+  .step.done { color: var(--ok); border-color: rgba(53,208,127,.4); }
 
-    window.getLocationPermission = () => {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition((position) => {
-          const pos = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          };
-          let adParamObject = document.getElementById('ad_params').value;
-          let adParams = JSON.parse(adParamObject);
-          adParams.userCoordinates = pos;
-          adParamObject = JSON.stringify(adParams);
-          document.getElementById('ad_params').value = adParamObject;
-        }, (error) => { //callback function that takes a GeolocationPositionError 
-          handleLocationError(error, true);
-        });
-      } else {
-        // Browser doesn't support Geolocation
-        handleLocationError(error, false);
-      }
-    }
-
-    function handleLocationError (error, geolocationAllowed) {
-      let errorMessage = "ERROR: ";
-      if(!geolocationAllowed) {
-        errorMessage += "Browser does not support Geolocation."
-      } else {
-        errorMessage += "Geolocation failed due to: " + error;
-      }
-      /**
-       * Using console.error() in place of sendLog temporarily.
-       * Currently order of function calls makes sendLog ineffective.
-       */
-      console.error(errorMessage);
-    }
-  </script>
+  #log {
+    background: #0a0c11; border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px; font: 12px/1.5 "SF Mono", Consolas, "Liberation Mono", monospace;
+    height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  #log .t { color: #5b6478; }
+  #log .in { color: var(--b); }
+  #log .out { color: var(--accent); }
+  #log .fire { color: var(--a); }
+  #log .warn { color: var(--err); }
+  #log .ok { color: var(--ok); }
+  .footer { color: var(--muted); font-size: 11px; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+</style>
 </head>
-
 <body>
+  <header>
+    <h1>SIMID 1.2 &mdash; Player Tracking Benchmark Creative</h1>
+    <p>Exercises three distinct pixel-firing paths. Filter the Network tab by <code>testing.simid.local</code>.</p>
+  </header>
 
-  <div>
-    <p><h1><center>SIMID Sample Ad Player</center></h1></p>
-    <table>
-      <tr>
-        <td>Choose Sample Creative Template</td>
-        <td>
-        <button onclick="switchCreative('simid_overlay.html')">overlay</button>
-        <button onclick="switchCreative('survey.html')">survey</button>
-        <button onclick="switchCreative('selector.html')">selector</button>
-        <button onclick="switchCreative('extender.html')">extender</button>
-        <button onclick="switchCreative('simid_map.html')">map</button>
-        <button onclick="switchCreative('testers_nonlinear.html')">testers_nonlinear</button>
-        <button onclick="switchCreative('banner_nonlinear.html')">banner_nonlinear</button>
-        <button onclick="switchCreative('hover_nonlinear.html')">hover_nonlinear</button>
-        <button onclick="switchCreative('simid_map.html')">map</button>
-      </td>
-      </tr>
-      <tr>
-        <td>Ad type</td>
-        <td>
-          <input type="radio" id="linear_ad" name="ad_type" onclick="setInputsForAdType()" checked> <label for="linear_ad" class="ad_type_label">Linear
-        Ad</label>
-        <input type="radio" id="nonlinear_ad" name="ad_type" onclick="setInputsForAdType()"> <label for="nonlinear_ad" class="ad_type_label">Non-Linear
-          Ad</label>
-        </td>
-      </tr>
-      <tr id="creative_dimensions" class="hidden">
-        <td>Creative Dimensions</td>
-        <td>
-          <label for="x_val">X: </label>
-          <input type="number" id="x_val" value="5" min="0" class="nonlinear_inputs">
-
-          <label for="y_val">Y: </label>
-          <input type="number" id="y_val" value="5" min="0" class="nonlinear_inputs">
-
-          <label for="width">Width: </label>
-          <input type="number" id="width" value="500" min="0" class="nonlinear_inputs">
-
-          <label for="height">Height: </label>
-          <input type="number" id="height" value="120" min="0" class="nonlinear_inputs">
-        </td>
-      </tr>
-      <tr id="creative_duration" class="hidden">
-        <td>Ad Duration (seconds)</td>
-        <td><input type="number" id="duration" value="30" min="0" class="nonlinear_inputs">
-        </td>
-      </tr>
-      <tr id="media_file">
-        <td>Media File</td>
-        <td><input type="text" id="video_url" size = 30 
-           value="../media/IAB480-small.mp4">
-        </td>
-      </tr>
-      <tr>
-        <td>Interactive Creative File</td>
-        <td><input type="text" id="creative_url" size = 30 
-           value="../creatives/simid_overlay.html">
-        </td>
-      </tr>
-      <tr>
-        <td>AdParameters</td>
-        <td><textarea id="ad_params" rows = 5 cols = 50></textarea></td>
-      </tr>
-    </table>
-    <button onclick="playAd()"> Start ad playback </button>
-    <button onclick="initAd()"> Initialize the creative </button>
-    <button id="geolocation" class="hidden" onclick="getLocationPermission()">Allow Location Access</button>
-    <button class="ad_request" onclick="closeAd()" disabled> Close the ad </button> 
-    <button class="ad_request" onclick="skipAd()" disabled> Skip ad </button>
-    <button class="ad_request" onclick="fatalError()" disabled> Fatal Error </button>
-    <button class="ad_request" onclick="pauseAd()" disabled> Pause ad</button>
-    <button class="ad_request" onclick="playAdVideo()" disabled> Play ad</button>
+  <div id="standaloneWarn">
+    &#9888; Running <b>outside</b> a SIMID player (no parent frame detected). The <code>createSession</code> /
+    <code>Player:init</code> / <code>Player:startCreative</code> handshake and <b>Pixel B</b> need a real player to
+    respond. <b>Pixel C</b> (direct) will still fire. Load this file via the VAST tag in a SIMID-capable player for the full test.
   </div>
 
-  <div id="player_div" style="position:absolute;">
-    <video id="video_player" class="content" src="../media/fakeContent.mp4" controls> </video>
-    <div id="ad_video_div" class="overlayed" style="display:none;">
-      <video id="ad_video_player" class="overlayed" style="display:none;" src="">
+  <div class="handshake" id="handshake">
+    <span class="step" data-step="createSession">1 &middot; createSession &rarr; player</span>
+    <span class="step" data-step="init">2 &middot; SIMID:Player:init</span>
+    <span class="step" data-step="startCreative">3 &middot; SIMID:Player:startCreative</span>
+    <span class="step" data-step="ready">4 &middot; creative ready</span>
+  </div>
+
+  <div class="grid">
+    <!-- PIXEL A -->
+    <div class="card">
+      <span class="tag a">Pixel A</span>
+      <h2>Player &mdash; from VAST XML</h2>
+      <p class="desc">Declared in the VAST as <code>&lt;Tracking event="interactiveStart"&gt;</code>. The player should
+      fire this automatically the moment the interactive creative initializes. This creative only <b>reports</b> whether the
+      player did its job.</p>
+      <div class="status waiting" id="statusA"><span class="dot"></span><span id="statusAText">Waiting for player init&hellip;</span></div>
+      <div class="url" id="urlA"></div>
     </div>
-    <!-- SIMID creative will be here. -->
+
+    <!-- PIXEL B -->
+    <div class="card">
+      <span class="tag b">Pixel B</span>
+      <h2>Player &mdash; via reportTracking</h2>
+      <p class="desc">This creative sends <code>SIMID:Creative:reportTracking</code> with a custom metric URL. The
+      <b>player</b> fires the network request. URL is defined here, not in the VAST.</p>
+      <button class="b" id="btnB" disabled>Fire Pixel B (ask player to track)</button>
+      <div class="status" id="statusB"><span class="dot"></span><span id="statusBText">Not yet requested</span></div>
+      <div class="url" id="urlB"></div>
+    </div>
+
+    <!-- PIXEL C -->
+    <div class="card">
+      <span class="tag c">Pixel C</span>
+      <h2>Creative &mdash; direct beacon</h2>
+      <p class="desc">Fired by this HTML itself using the native <code>Image()</code> beacon (with a <code>fetch()</code>
+      fallback). The player is <b>not</b> involved &mdash; this always works, even standalone.</p>
+      <button class="c" id="btnC">Fire Pixel C (direct from creative)</button>
+      <div class="status" id="statusC"><span class="dot"></span><span id="statusCText">Not yet fired</span></div>
+      <div class="url" id="urlC"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="footer" style="margin-bottom:6px;">SIMID message log (postMessage in/out + pixel activity)</div>
+    <div id="log"></div>
+  </div>
+
+  <div class="footer">
+    adParameters received from VAST: <code id="adParams">(none yet)</code>
   </div>
 
 <script>
-</script>
-<body>
+"use strict";
+(function () {
+  /* =================================================================
+     CONFIG - Tracking pixel URLs
+     -----------------------------------------------------------------
+     All three share one dummy host so they never resolve to a real
+     server (they'll show as failed/pending in DevTools - that's fine,
+     the REQUEST is what we're benchmarking). Readable query strings
+     let you tell A / B / C apart at a glance in the Network tab.
 
+     [CACHEBUSTING] and [TIMESTAMP] are standard VAST macros. Player-
+     fired pixels (A, B) should have these REPLACED by the player. The
+     creative-fired pixel (C) does its own cache-busting in JS, proving
+     it is the creative - not the player - making the request.
+  ================================================================= */
+  var HOST = "https://testing.simid.local";
+
+  // Pixel B URL - supplied to the player via reportTracking.
+  // Note the custom, non-VAST metric name so you can prove the creative
+  // (not the VAST) originated it.
+  var PIXEL_B_URL = HOST + "/pixel-b" +
+      "?source=simid_reportTracking" +
+      "&fired_by=player" +
+      "&metric=custom_user_engagement" +
+      "&creative=simid_qa_benchmark" +
+      "&cb=[CACHEBUSTING]";
+
+  // Pixel C URL - fired directly by this creative. Cache-buster is
+  // filled in by JS at click time (no player macro replacement).
+  function pixelCUrl() {
+    return HOST + "/pixel-c" +
+      "?source=creative_direct" +
+      "&fired_by=html_creative" +
+      "&metric=native_image_beacon" +
+      "&creative=simid_qa_benchmark" +
+      "&cb=" + Date.now();
+  }
+
+  /* =================================================================
+     Tiny logger
+  ================================================================= */
+  var logEl = document.getElementById("log");
+  function log(msg, cls) {
+    var line = document.createElement("div");
+    var t = new Date().toISOString().substr(11, 12);
+    line.innerHTML = '<span class="t">' + t + '</span>  ';
+    var span = document.createElement("span");
+    if (cls) span.className = cls;
+    span.textContent = msg;
+    line.appendChild(span);
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function markStep(name) {
+    var el = document.querySelector('.step[data-step="' + name + '"]');
+    if (el) el.classList.add("done");
+  }
+
+  /* =================================================================
+     Minimal SIMID 1.2 protocol - CREATIVE side.
+     Faithful to the IAB reference (examples/simid_protocol.js):
+       - envelope: {sessionId, messageId, type, timestamp, args}
+       - 'createSession' is NOT namespaced; everything else is 'SIMID:'+type
+       - resolve/reject carry args:{messageId:<orig>, value:{...}}
+       - messages are JSON.stringify'd and posted to window.parent
+  ================================================================= */
+  var SIMID = {
+    sessionId: "",
+    nextMessageId: 1,
+    target: window.parent,
+    pending: {}, // messageId -> {resolve, reject}
+
+    // Messages the player must respond to (we await resolve/reject).
+    needsResponse: {
+      "createSession": true,
+      "Creative:reportTracking": true
+    },
+
+    send: function (type, args) {
+      var id = this.nextMessageId++;
+      var wireType = (type === "createSession") ? type : "SIMID:" + type;
+      var msg = {
+        sessionId: this.sessionId,
+        messageId: id,
+        type: wireType,
+        timestamp: Date.now(),
+        args: args || null
+      };
+      var self = this;
+      log("→ out  " + wireType + (args ? "  " + JSON.stringify(args) : ""), "out");
+      if (this.needsResponse[type]) {
+        return new Promise(function (resolve, reject) {
+          self.pending[id] = { resolve: resolve, reject: reject };
+          self.target.postMessage(JSON.stringify(msg), "*");
+        });
+      }
+      this.target.postMessage(JSON.stringify(msg), "*");
+      return Promise.resolve();
+    },
+
+    // Send a resolve for an inbound message the player expects us to ack.
+    resolve: function (incoming, value) {
+      var id = this.nextMessageId++;
+      var msg = {
+        sessionId: this.sessionId,
+        messageId: id,
+        type: "resolve",
+        timestamp: Date.now(),
+        args: { messageId: incoming.messageId, value: value || {} }
+      };
+      log("→ out  resolve  (re: msgId " + incoming.messageId + ")", "out");
+      this.target.postMessage(JSON.stringify(msg), "*");
+    },
+
+    receive: function (event) {
+      if (!event || !event.data) return;
+      var data;
+      try { data = JSON.parse(event.data); } catch (e) { return; } // not a SIMID msg
+      if (!data || !data.type) return;
+
+      var type = data.type;
+
+      // resolve / reject to one of OUR outbound messages
+      if (type === "resolve" || type === "reject") {
+        var corr = data.args && data.args.messageId;
+        var p = this.pending[corr];
+        if (p) {
+          log("← in   " + type + "  (re: msgId " + corr + ")", type === "resolve" ? "ok" : "warn");
+          (type === "resolve" ? p.resolve : p.reject)(data.args ? data.args.value : undefined);
+          delete this.pending[corr];
+        }
+        return;
+      }
+
+      // Player -> creative messages are namespaced "SIMID:"
+      if (type.indexOf("SIMID:") !== 0) return;
+      var shortType = type.substr(6);
+      // Accept only our session once it is established.
+      if (this.sessionId && data.sessionId !== this.sessionId) return;
+
+      log("← in   " + type, "in");
+      if (this.handlers[shortType]) this.handlers[shortType](data);
+    },
+
+    handlers: {}
+  };
+
+  /* =================================================================
+     Lifecycle handlers
+  ================================================================= */
+  SIMID.handlers["Player:init"] = function (data) {
+    markStep("init");
+    var creativeData = (data.args && data.args.creativeData) || {};
+    var env = (data.args && data.args.environmentData) || {};
+
+    // Surface adParameters coming from the VAST (creativeData.adParameters)
+    if (creativeData.adParameters) {
+      document.getElementById("adParams").textContent = creativeData.adParameters;
+    }
+    log("      environmentData: " + JSON.stringify(env));
+
+    // Pixel A is the player's responsibility (VAST interactiveStart).
+    // Init has arrived, so the player *should* have fired Pixel A by now.
+    var sA = document.getElementById("statusA");
+    sA.className = "status fired";
+    document.getElementById("statusAText").textContent =
+      "Creative initialized — verify player fired 'interactiveStart' in Network tab";
+
+    // Acknowledge init so the player can proceed.
+    SIMID.resolve(data, {});
+  };
+
+  SIMID.handlers["Player:startCreative"] = function (data) {
+    markStep("startCreative");
+    SIMID.resolve(data, {});
+    markStep("ready");
+    log("Creative is now running. Pixel B & C actions enabled.", "ok");
+    document.getElementById("btnB").disabled = false;
+  };
+
+  // Some players (and error/stop flows) may send these; ack them politely.
+  ["Player:adStopped", "Player:adSkipped", "Player:fatalError", "Player:resize"].forEach(function (t) {
+    SIMID.handlers[t] = function (data) { SIMID.resolve(data, {}); };
+  });
+
+  /* =================================================================
+     Wire up the page
+  ================================================================= */
+  document.getElementById("urlB").textContent = PIXEL_B_URL;
+  document.getElementById("urlA").textContent =
+    "(defined in VAST XML – see <Tracking event=\"interactiveStart\">)";
+  document.getElementById("urlC").textContent = pixelCUrl();
+
+  var isStandalone = (window.parent === window.self);
+  if (isStandalone) {
+    document.getElementById("standaloneWarn").style.display = "block";
+    log("No parent frame: running standalone. Handshake will not complete.", "warn");
+  }
+
+  // ---- Pixel B: ask the PLAYER to fire it via reportTracking ----
+  document.getElementById("btnB").addEventListener("click", function () {
+    var s = document.getElementById("statusB");
+    document.getElementById("statusBText").textContent = "reportTracking sent — waiting for player…";
+    log("Requesting player to fire Pixel B via Creative:reportTracking", "fire");
+    SIMID.send("Creative:reportTracking", { trackingUrls: [PIXEL_B_URL] })
+      .then(function () {
+        s.className = "status fired";
+        document.getElementById("statusBText").textContent = "Player acknowledged (resolve). Check Network tab.";
+        log("Pixel B: player resolved reportTracking.", "ok");
+      })
+      .catch(function () {
+        s.className = "status";
+        document.getElementById("statusBText").textContent = "Player rejected reportTracking.";
+        log("Pixel B: player REJECTED reportTracking.", "warn");
+      });
+  });
+
+  // ---- Pixel C: fire directly from the creative (no player) ----
+  document.getElementById("btnC").addEventListener("click", function () {
+    var url = pixelCUrl();
+    document.getElementById("urlC").textContent = url;
+    log("Firing Pixel C directly (native Image beacon)", "fire");
+
+    var img = new Image();
+    img.onload = img.onerror = function () {
+      // onerror is expected because the dummy host doesn't resolve;
+      // the network REQUEST is still what we're benchmarking.
+      var s = document.getElementById("statusC");
+      s.className = "status fired";
+      document.getElementById("statusCText").textContent = "Beacon dispatched (see Network tab).";
+    };
+    img.src = url;
+
+    // Fetch fallback (keepalive) for players/browsers that block Image.
+    if (window.fetch) {
+      fetch(url, { mode: "no-cors", keepalive: true }).catch(function () {});
+    }
+    log("Pixel C: request dispatched from creative.", "ok");
+  });
+
+  /* =================================================================
+     Boot: open the postMessage channel and start the handshake.
+  ================================================================= */
+  window.addEventListener("message", SIMID.receive.bind(SIMID), false);
+
+  // Generate a v4-style session id (crypto if available).
+  SIMID.sessionId = (function () {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      var r = (Math.random() * 16) | 0, v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  })();
+
+  if (!isStandalone) {
+    log("Session id: " + SIMID.sessionId);
+    SIMID.send("createSession")
+      .then(function () {
+        markStep("createSession");
+        log("Session created — player acknowledged createSession.", "ok");
+      })
+      .catch(function () {
+        log("createSession was rejected by the player.", "warn");
+      });
+  }
+})();
+</script>
+</body>
 </html>
